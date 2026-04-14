@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #080B14;
+  --bg-secondary: #0D1117;
+  --bg-card: rgba(255, 255, 255, 0.05);
+  --bg-card-hover: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(139, 92, 246, 0.5);
+  --accent-purple: #8B5CF6;
+  --accent-blue: #3B82F6;
+  --accent-cyan: #06B6D4;
+  --accent-green: #10B981;
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-muted: #475569;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, ui-sans-serif, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.5);
+  border-radius: 9999px;
+}
+
+/* PDF.js text layer + highlights */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  line-height: 1;
+}
+
+.textLayer span {
+  color: transparent !important;
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0% 0%;
+  cursor: text;
+  pointer-events: auto;
+}
+
+.textLayer span.highlight-yellow {
+  background: rgba(255, 214, 10, 0.45) !important;
+  border-radius: 2px;
+}
+
+.textLayer span.highlight-blue {
+  background: rgba(0, 180, 216, 0.45) !important;
+  border-radius: 2px;
+}
+
+.textLayer span.highlight-green {
+  background: rgba(6, 214, 160, 0.45) !important;
+  border-radius: 2px;
+}
+
+.textLayer span.highlight-orange {
+  background: rgba(255, 159, 28, 0.45) !important;
+  border-radius: 2px;
+}
+
+.textLayer span.highlight-purple {
+  background: rgba(155, 93, 229, 0.45) !important;
+  border-radius: 2px;
+}
+
+.textLayer span.ll-highlight {
+  border-radius: 3px;
+  mix-blend-mode: multiply;
+  transition: background 0.3s ease, opacity 0.4s ease;
+}
+
+.textLayer span.highlight-new {
+  animation: highlightPulse 0.4s ease-out;
+}
+
+@keyframes highlightPulse {
+  0% {
+    opacity: 0;
+    transform: scaleX(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+

@@ -45,7 +45,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`LuminaLearn backend listening on http://localhost:${PORT}`);
-});
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`LuminaLearn backend listening on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
 

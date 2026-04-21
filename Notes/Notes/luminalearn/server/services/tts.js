@@ -1,10 +1,10 @@
-const fs = require('fs');
-const path = require('path');
-const ElevenLabs = require('elevenlabs-node');
+const DEFAULT_ELEVENLABS_MODEL = 'eleven_multilingual_v2';
 
-function getVoiceClient() {
+function getVoiceConfig() {
   const apiKey = process.env.ELEVEN_LABS_API_KEY;
   const voiceId = process.env.ELEVEN_LABS_VOICE_ID;
+  const modelId = process.env.ELEVEN_LABS_MODEL_ID || DEFAULT_ELEVENLABS_MODEL;
+
   if (!apiKey || !voiceId) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -12,16 +12,54 @@ function getVoiceClient() {
     );
     return null;
   }
+
   // eslint-disable-next-line no-console
   console.log(
-    `[TTS] ElevenLabs configured. voiceId=${voiceId} modelId=${process.env.ELEVEN_LABS_MODEL_ID || 'default'}`,
+    `[TTS] ElevenLabs configured. voiceId=${voiceId} modelId=${modelId}`,
   );
-  return new ElevenLabs({ apiKey, voiceId });
+  return { apiKey, voiceId, modelId };
 }
 
-async function fileToBase64(filePath) {
-  const data = await fs.promises.readFile(filePath);
-  return data.toString('base64');
+async function requestElevenLabsAudio({ apiKey, voiceId, modelId, text }) {
+  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'audio/mpeg',
+      'Content-Type': 'application/json',
+      'xi-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      text,
+      model_id: modelId,
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.5,
+        style: 1,
+        use_speaker_boost: true,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    let details = '';
+    try {
+      details = await response.text();
+    } catch (_err) {
+      details = '';
+    }
+    throw new Error(
+      `ElevenLabs request failed (${response.status} ${response.statusText})${
+        details ? `: ${details}` : ''
+      }`,
+    );
+  }
+
+  const audioBuffer = Buffer.from(await response.arrayBuffer());
+  if (!audioBuffer.length) {
+    throw new Error('ElevenLabs returned empty audio response');
+  }
+
+  return audioBuffer.toString('base64');
 }
 
 async function generateSpeechBase64(text) {
@@ -32,41 +70,21 @@ async function generateSpeechBase64(text) {
     return null;
   }
 
-  const voice = getVoiceClient();
-  if (!voice) {
+  const voiceConfig = getVoiceConfig();
+  if (!voiceConfig) {
     // eslint-disable-next-line no-console
-    console.warn('[TTS] Skipping generation: voice client unavailable');
+    console.warn('[TTS] Skipping generation: voice config unavailable');
     return null;
   }
-
-  const modelId = process.env.ELEVEN_LABS_MODEL_ID;
-  const voiceId = process.env.ELEVEN_LABS_VOICE_ID;
-
-  const tmpDir = path.join(__dirname, '..', 'tmp');
-  if (!fs.existsSync(tmpDir)) {
-    fs.mkdirSync(tmpDir, { recursive: true });
-  }
-
-  const fileName = path.join(
-    tmpDir,
-    `speech-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`,
-  );
 
   try {
     // eslint-disable-next-line no-console
     console.log(`[TTS] Generating speech for ${trimmed.length} chars`);
-    await voice.textToSpeech({
-      fileName,
-      textInput: trimmed,
-      voiceId,
-      stability: 0.5,
-      similarityBoost: 0.5,
-      modelId,
-      style: 1,
-      speakerBoost: true,
-    });
 
-    const audioBase64 = await fileToBase64(fileName);
+    const audioBase64 = await requestElevenLabsAudio({
+      ...voiceConfig,
+      text: trimmed,
+    });
     // eslint-disable-next-line no-console
     console.log(`[TTS] Generated audio successfully (${audioBase64.length} base64 chars)`);
     return audioBase64;
@@ -74,10 +92,6 @@ async function generateSpeechBase64(text) {
     // eslint-disable-next-line no-console
     console.error('[TTS] ElevenLabs generation failed:', err.message);
     throw err;
-  } finally {
-    if (fs.existsSync(fileName)) {
-      fs.unlinkSync(fileName);
-    }
   }
 }
 

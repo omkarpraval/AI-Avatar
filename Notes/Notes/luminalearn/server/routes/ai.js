@@ -93,6 +93,30 @@ Rules:
 - Keep the answer focused and accurate.
 `;
 
+const QUIZ_EVALUATION_PROMPT = `
+You evaluate student quiz answers fairly.
+
+ALWAYS return valid JSON with this shape:
+{
+  "result": "correct|partially_correct|incorrect",
+  "score": 0.0,
+  "reason": "short explanation of the judgment",
+  "missing_points": ["point 1", "point 2"],
+  "accepted_perspective": "short note about what part of the student's wording was understood"
+}
+
+Rules:
+- Judge based on meaning, not exact wording.
+- Accept paraphrases, synonyms, reordered phrasing, and minor grammar/spelling mistakes.
+- Give "correct" when the core idea matches the reference answer.
+- Give "partially_correct" when the student has some correct understanding but misses an essential point.
+- Give "incorrect" when the answer is conceptually wrong, empty, or unrelated.
+- "score" must be between 0 and 1.
+- Keep "reason" concise and student-friendly.
+- Keep "missing_points" empty when the answer is correct.
+- Do not be overly strict.
+`;
+
 async function callTutor(req, res, next, { mode }) {
   try {
     const {
@@ -340,6 +364,147 @@ function truncateToTokenBudget(text, maxChars = 20000) {
   )}\n\n[Context truncated to fit the model's context window.]`;
 }
 
+function normalizeAnswer(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function inferQuestionKind(question) {
+  if (Array.isArray(question?.options) && question.options.length > 0) return 'mcq';
+  const answer = normalizeAnswer(question?.answer || '');
+  if (answer === 'true' || answer === 'false') return 'truefalse';
+  return 'qa';
+}
+
+function scoreToResult(score) {
+  if (score >= 0.8) return 'correct';
+  if (score >= 0.4) return 'partially_correct';
+  return 'incorrect';
+}
+
+function quickEvaluateAnswer(question, userAnswer) {
+  const expected = normalizeAnswer(question?.answer || '');
+  const given = normalizeAnswer(userAnswer || '');
+  const kind = inferQuestionKind(question);
+
+  if (!given || !expected) {
+    return {
+      result: 'incorrect',
+      score: 0,
+      reason: 'No answer was provided.',
+      missing_points: expected ? ['Provide the key idea asked in the question.'] : [],
+      accepted_perspective: '',
+    };
+  }
+
+  if (kind === 'mcq') {
+    const normalizedOptions = (question?.options || []).map((opt) => normalizeAnswer(opt));
+    if (given === expected) {
+      return {
+        result: 'correct',
+        score: 1,
+        reason: 'The selected option matches the expected answer.',
+        missing_points: [],
+        accepted_perspective: 'Matched the expected option exactly.',
+      };
+    }
+    if (given.length === 1 && /^[a-z]$/.test(given) && normalizedOptions.length) {
+      const optionIdx = given.charCodeAt(0) - 97;
+      if (normalizedOptions[optionIdx] === expected) {
+        return {
+          result: 'correct',
+          score: 1,
+          reason: 'The selected option matches the expected answer.',
+          missing_points: [],
+          accepted_perspective: 'Recognized the answer from the option letter.',
+        };
+      }
+    }
+    return {
+      result: 'incorrect',
+      score: 0,
+      reason: 'The selected option does not match the expected answer.',
+      missing_points: [],
+      accepted_perspective: '',
+    };
+  }
+
+  if (kind === 'truefalse') {
+    return {
+      result: given === expected ? 'correct' : 'incorrect',
+      score: given === expected ? 1 : 0,
+      reason:
+        given === expected
+          ? 'The true/false answer matches.'
+          : 'The true/false answer does not match.',
+      missing_points: [],
+      accepted_perspective: given === expected ? 'Recognized the same boolean judgment.' : '',
+    };
+  }
+
+  if (given === expected) {
+    return {
+      result: 'correct',
+      score: 1,
+      reason: 'The answer matches the expected meaning closely.',
+      missing_points: [],
+      accepted_perspective: 'Matched the expected answer exactly.',
+    };
+  }
+
+  return null;
+}
+
+async function evaluateQuizAnswer(question, userAnswer) {
+  const quick = quickEvaluateAnswer(question, userAnswer);
+  if (quick || inferQuestionKind(question) !== 'qa') {
+    return quick;
+  }
+
+  const messages = [
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: `Question:
+${question?.question || ''}
+
+Reference answer:
+${question?.answer || ''}
+
+Optional explanation:
+${question?.explanation || ''}
+
+Student answer:
+${userAnswer || ''}
+
+Evaluate whether the student answer is correct, partially correct, or incorrect.`,
+        },
+      ],
+    },
+  ];
+
+  const json = await askClaude({
+    systemPrompt: QUIZ_EVALUATION_PROMPT,
+    messages,
+    maxTokens: 350,
+  });
+
+  const numericScore = Math.max(0, Math.min(1, Number(json?.score) || 0));
+  return {
+    result: ['correct', 'partially_correct', 'incorrect'].includes(json?.result)
+      ? json.result
+      : scoreToResult(numericScore),
+    score: numericScore,
+    reason: String(json?.reason || 'Answer evaluated.'),
+    missing_points: Array.isArray(json?.missing_points) ? json.missing_points : [],
+    accepted_perspective: String(json?.accepted_perspective || ''),
+  };
+}
+
 router.post('/ask', async (req, res, next) => {
   return callTutor(req, res, next, { mode: req.body?.mode || 'chat' });
 });
@@ -496,6 +661,36 @@ ${safeDocumentText}`,
     if (status === 429) {
       return res.status(429).json({
         error: 'Rate limit reached. Please wait a few seconds and try again.',
+      });
+    }
+
+    return next(err);
+  }
+});
+
+router.post('/quiz/evaluate', async (req, res, next) => {
+  try {
+    const { question, userAnswer } = req.body || {};
+    if (!question || !question.question || !question.answer) {
+      return res.status(400).json({ error: 'question with question and answer fields is required' });
+    }
+
+    const evaluation = await evaluateQuizAnswer(question, userAnswer);
+    return res.json(evaluation);
+  } catch (err) {
+    console.error('Quiz evaluation error:', err);
+    const status = err.status || err.code || err?.error?.status;
+    const message = err.message || 'Quiz evaluation failed';
+
+    if (status === 429) {
+      return res.status(429).json({
+        error: 'Rate limit reached while grading. Please retry in a few seconds.',
+      });
+    }
+
+    if (status === 413 || /too large|tokens per minute|TPM|rate_limit_exceeded/i.test(message)) {
+      return res.status(413).json({
+        error: 'Quiz grading request exceeded current AI limits. Please try again.',
       });
     }
 

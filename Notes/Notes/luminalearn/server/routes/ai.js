@@ -17,6 +17,10 @@ ALWAYS structure your JSON response as:
     {
       "page": 3,
       "text_snippet": "exact text from document to highlight",
+      "anchor_before": "short nearby phrase before text_snippet",
+      "anchor_after": "short nearby phrase after text_snippet",
+      "section_heading": "nearest section heading on that page",
+      "has_figure": true,
       "type": "text|bullet|keyterm|diagram|crossdoc",
       "color": "yellow|blue|green|orange|purple",
       "tooltip": "brief note about why this is highlighted"
@@ -47,6 +51,9 @@ CRITICAL highlighting rules:
   highlight entries for ALL relevant pages, not just the first one.
 - Never return fewer than 3 highlights for any reasonable question unless the
   content genuinely only appears once in the provided context.
+- Include all major subpoints under the asked topic (definition, key properties,
+  important bullets/table rows, and one diagram reference when available).
+- Prefer 5-8 highlights for topic-level questions.
 
 HIGHLIGHT TEXT SNIPPETS (VERY IMPORTANT):
 - "page" values in both "highlights" and "citations" MUST refer to the
@@ -58,6 +65,13 @@ HIGHLIGHT TEXT SNIPPETS (VERY IMPORTANT):
   capitalization and punctuation. Do NOT paraphrase or rephrase.
 - Keep each "text_snippet" short (about 3–7 words) that uniquely identifies
   the phrase to highlight.
+- For broad topic questions, include multiple snippets covering distinct parts
+  of the same topic instead of repeating near-identical lines.
+- Include "anchor_before" and "anchor_after" for robust frontend matching when
+  PDF text is split into multiple spans.
+- Include "section_heading" (nearest heading on the same page).
+- Set "has_figure": true when a related figure/diagram/chart/table appears on
+  this page or nearby pages.
 - Good examples:
     "CAP Theorem"
     "Consistency Models"
@@ -281,16 +295,67 @@ function validateHighlights(highlights, pages) {
     .map((p) => String(p.text || '').toLowerCase())
     .join(' ');
 
-  return (highlights || []).filter((hl) => {
-    const snippet = String(hl?.text_snippet || '').toLowerCase().trim();
-    if (!snippet || snippet.length < 2) return false;
-    const exists = allText.includes(snippet);
-    if (!exists) {
-      // eslint-disable-next-line no-console
-      console.warn(`Snippet not found in provided context: "${hl.text_snippet}"`);
-    }
-    return exists;
-  });
+  const strict = (highlights || [])
+    .map((hl) => ({
+      ...hl,
+      page: Number(hl?.page),
+      text_snippet: String(hl?.text_snippet || '').trim(),
+      anchor_before: String(hl?.anchor_before || '').trim(),
+      anchor_after: String(hl?.anchor_after || '').trim(),
+      section_heading: String(hl?.section_heading || '').trim(),
+      has_figure: Boolean(hl?.has_figure),
+    }))
+    .filter((hl) => {
+      const snippet = String(hl?.text_snippet || '').toLowerCase().trim();
+      if (!hl.page || Number.isNaN(hl.page)) return false;
+      if (!snippet || snippet.length < 2) return false;
+      const exists = allText.includes(snippet);
+      if (!exists) {
+        // eslint-disable-next-line no-console
+        console.warn(`Snippet not found in provided context: "${hl.text_snippet}"`);
+      }
+      return exists || hl.has_figure || /diagram|figure|chart|table/i.test(String(hl?.type || ''));
+    });
+
+  if (strict.length >= 2) return strict.slice(0, 8);
+
+  const blended = [...strict];
+  const fallbackCandidates = (highlights || [])
+    .map((hl) => ({
+      ...hl,
+      page: Number(hl?.page),
+      text_snippet: String(hl?.text_snippet || '').trim(),
+      anchor_before: String(hl?.anchor_before || '').trim(),
+      anchor_after: String(hl?.anchor_after || '').trim(),
+      section_heading: String(hl?.section_heading || '').trim(),
+      has_figure: Boolean(hl?.has_figure),
+    }))
+    .filter((hl) => hl.page && !Number.isNaN(hl.page) && String(hl.text_snippet).length >= 2)
+    .slice(0, 10);
+  for (const hl of fallbackCandidates) {
+    if (blended.length >= 8) break;
+    const exists = blended.some(
+      (b) =>
+        b.page === hl.page &&
+        String(b.text_snippet || '').toLowerCase() === String(hl.text_snippet || '').toLowerCase(),
+    );
+    if (!exists) blended.push(hl);
+  }
+  if (blended.length) return blended.slice(0, 8);
+
+  // Fallback: keep minimally valid highlights so frontend can still anchor by page.
+  return (highlights || [])
+    .map((hl) => ({
+      ...hl,
+      page: Number(hl?.page),
+      text_snippet: String(hl?.text_snippet || '').trim(),
+      anchor_before: String(hl?.anchor_before || '').trim(),
+      anchor_after: String(hl?.anchor_after || '').trim(),
+      section_heading: String(hl?.section_heading || '').trim(),
+      has_figure: Boolean(hl?.has_figure),
+    }))
+    .filter((hl) => hl.page && !Number.isNaN(hl.page) && String(hl.text_snippet).length >= 2)
+    .slice(0, 8);
 }
 
 function tokenize(text) {
